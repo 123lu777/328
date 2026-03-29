@@ -136,11 +136,13 @@ def main():
     # training
     parser.add_argument('--patch_size', default=256, type=int)
     parser.add_argument('--num_epochs', default=120, type=int)
-    parser.add_argument('--batch_size', default=4, type=int)
+    parser.add_argument('--batch_size', default=16, type=int)
+    parser.add_argument('--val_batch_size', default=16, type=int)
     parser.add_argument('--val_epochs', default=2, type=int)
     parser.add_argument('--print_iters', default=100, type=int)
     parser.add_argument('--num_workers', default=4, type=int)
     parser.add_argument('--seed', default=1234, type=int)
+    parser.add_argument('--save_every_epoch', type=str2bool, nargs='?', const=True, default=True)
 
     # lr
     parser.add_argument('--start_lr', default=5e-5, type=float)
@@ -157,7 +159,7 @@ def main():
     parser.add_argument('--resume', action='store_true', help='resume from model_latest.pth in current session dir')
 
     # env
-    parser.add_argument('--gpus', default='0', type=str)
+    parser.add_argument('--gpus', default='0,1', type=str)
     args = parser.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
@@ -233,7 +235,7 @@ def main():
         num_workers=args.num_workers, drop_last=False, pin_memory=True
     )
     val_loader = DataLoader(
-        val_dataset, batch_size=8, shuffle=False,
+        val_dataset, batch_size=args.val_batch_size, shuffle=False,
         num_workers=args.num_workers, drop_last=False, pin_memory=True
     )
 
@@ -310,7 +312,8 @@ def main():
                 torch.save({
                     'epoch': epoch,
                     'state_dict': model_restoration.state_dict(),
-                    'optimizer': optimizer.state_dict()
+                    'optimizer': optimizer.state_dict(),
+                    'scheduler': scheduler.state_dict()
                 }, os.path.join(model_dir, 'model_best.pth'))
 
             with open(log_path, 'a+') as f:
@@ -328,16 +331,19 @@ def main():
             f.write(f'Epoch: {epoch}\tTime: {time.time() - epoch_start:.2f}\tLoss: {epoch_loss:.4f}\tLR {lr_now:.6f}\n')
             f.write('-' * 66 + '\n')
 
-        torch.save({
-            'epoch': epoch,
-            'state_dict': model_restoration.state_dict(),
-            'optimizer': optimizer.state_dict()
-        }, os.path.join(model_dir, f'model_epoch_{epoch}.pth'))
+        if args.save_every_epoch:
+            torch.save({
+                'epoch': epoch,
+                'state_dict': model_restoration.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'scheduler': scheduler.state_dict()
+            }, os.path.join(model_dir, f'model_epoch_{epoch}.pth'))
 
         torch.save({
             'epoch': epoch,
             'state_dict': model_restoration.state_dict(),
-            'optimizer': optimizer.state_dict()
+            'optimizer': optimizer.state_dict(),
+            'scheduler': scheduler.state_dict()
         }, os.path.join(model_dir, 'model_latest.pth'))
 
 
