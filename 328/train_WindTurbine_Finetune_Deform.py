@@ -17,7 +17,6 @@ from data.data_RGB import get_training_data, get_validation_data
 from loss import losses
 from warmup_scheduler import GradualWarmupScheduler
 from models.MISCFilterNet_Deform import MISCKernelNet_Deform as myNet
-from tools.get_parameter_number import get_parameter_number
 
 
 def set_seeds(seed: int = 1234):
@@ -98,14 +97,35 @@ def trainable_params(model: nn.Module):
     return [p for p in model.parameters() if p.requires_grad]
 
 
+def compute_remaining_schedule(start_epoch: int, num_epochs: int, warmup_epochs: int):
+    done_epochs = max(0, start_epoch - 1)
+    remain_epochs = max(0, num_epochs - done_epochs)
+    # Bound warmup by both original warmup budget and total remaining epochs.
+    remain_warmup = min(max(0, warmup_epochs - done_epochs), remain_epochs)
+    cosine_phase_epochs = max(0, remain_epochs - remain_warmup)
+    # CosineAnnealingLR requires T_max >= 1.
+    cosine_tmax = max(1, cosine_phase_epochs)
+    return remain_epochs, remain_warmup, cosine_tmax
+
+
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', '1', 'y'):
+        return True
+    if v.lower() in ('no', 'false', 'f', '0', 'n'):
+        return False
+    raise argparse.ArgumentTypeError(f'Boolean value expected, got: {v}')
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Finetune MISCFilter Deform on custom wind-turbine dataset")
+    parser = argparse.ArgumentParser(description="Finetune MISCKernelNet_Deform on custom WindTurbine dataset")
 
     # data
     parser.add_argument('--train_dir', default='./dataset/WindTurbine', type=str)
-    parser.add_argument('--train_meta', default='./dataset/WindTurbine/Wind_train_list.txt', type=str)
+    parser.add_argument('--train_meta', default='./dataset/WindTurbine/WindTurbine_train_list.txt', type=str)
     parser.add_argument('--val_dir', default='./dataset/WindTurbine', type=str)
-    parser.add_argument('--val_meta', default='./dataset/WindTurbine/Wind_val_list.txt', type=str)
+    parser.add_argument('--val_meta', default='./dataset/WindTurbine/WindTurbine_val_list.txt', type=str)
 
     # io
     parser.add_argument('--model_save_dir', default='./checkpoints_deform', type=str)
@@ -128,8 +148,8 @@ def main():
     parser.add_argument('--warmup_epochs', default=3, type=int)
 
     # deform settings
-    parser.add_argument('--use_deform_in_feat', default=True, type=bool)
-    parser.add_argument('--use_deform_in_encoder', default=True, type=bool)
+    parser.add_argument('--use_deform_in_feat', type=str2bool, nargs='?', const=True, default=True)
+    parser.add_argument('--use_deform_in_encoder', type=str2bool, nargs='?', const=True, default=True)
 
     # finetune policy
     parser.add_argument('--freeze_policy', default='kernel_plus_decoder',
@@ -170,18 +190,6 @@ def main():
 
     optimizer = optim.Adam(trainable_params(model_restoration), lr=args.start_lr, betas=(0.9, 0.999), eps=1e-8)
 
-    scheduler_cosine = optim.lr_scheduler.CosineAnnealingLR(
-        optimizer,
-        T_max=max(1, args.num_epochs - args.warmup_epochs),
-        eta_min=args.end_lr
-    )
-    scheduler = GradualWarmupScheduler(
-        optimizer,
-        multiplier=1,
-        total_epoch=args.warmup_epochs,
-        after_scheduler=scheduler_cosine
-    )
-
     start_epoch = 1
     if args.resume:
         resume_ckpt = os.path.join(model_dir, 'model_latest.pth')
@@ -190,8 +198,28 @@ def main():
         utils.load_checkpoint(model_restoration, resume_ckpt)
         start_epoch = utils.load_start_epoch(resume_ckpt) + 1
         utils.load_optim(optimizer, resume_ckpt)
-        for _ in range(1, start_epoch):
-            scheduler.step()
+
+    if start_epoch > args.num_epochs:
+        print(f'Current checkpoint epoch already exceeds num_epochs ({start_epoch - 1} > {args.num_epochs}), nothing to train.')
+        return
+
+    remain_epochs, remain_warmup, cosine_tmax = compute_remaining_schedule(
+        start_epoch=start_epoch,
+        num_epochs=args.num_epochs,
+        warmup_epochs=args.warmup_epochs
+    )
+
+    scheduler_cosine = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=cosine_tmax,
+        eta_min=args.end_lr
+    )
+    scheduler = GradualWarmupScheduler(
+        optimizer,
+        multiplier=1,
+        total_epoch=remain_warmup,
+        after_scheduler=scheduler_cosine
+    )
 
     criterion_char = losses.CharbonnierLoss()
     criterion_edge = losses.EdgeLoss()
