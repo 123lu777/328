@@ -108,7 +108,7 @@ def compute_remaining_schedule(start_epoch: int, num_epochs: int, warmup_epochs:
     return remain_epochs, remain_warmup, cosine_tmax
 
 
-def str2bool(v):
+def str_to_bool(v):
     if isinstance(v, bool):
         return v
     if v.lower() in ('yes', 'true', 't', '1', 'y'):
@@ -142,7 +142,7 @@ def main():
     parser.add_argument('--print_iters', default=100, type=int)
     parser.add_argument('--num_workers', default=4, type=int)
     parser.add_argument('--seed', default=1234, type=int)
-    parser.add_argument('--save_every_epoch', type=str2bool, nargs='?', const=True, default=True)
+    parser.add_argument('--save_every_epoch', type=str_to_bool, nargs='?', const=True, default=True)
 
     # lr
     parser.add_argument('--start_lr', default=5e-5, type=float)
@@ -150,8 +150,8 @@ def main():
     parser.add_argument('--warmup_epochs', default=3, type=int)
 
     # deform settings
-    parser.add_argument('--use_deform_in_feat', type=str2bool, nargs='?', const=True, default=True)
-    parser.add_argument('--use_deform_in_encoder', type=str2bool, nargs='?', const=True, default=True)
+    parser.add_argument('--use_deform_in_feat', type=str_to_bool, nargs='?', const=True, default=True)
+    parser.add_argument('--use_deform_in_encoder', type=str_to_bool, nargs='?', const=True, default=True)
 
     # finetune policy
     parser.add_argument('--freeze_policy', default='kernel_plus_decoder',
@@ -222,6 +222,11 @@ def main():
         total_epoch=remain_warmup,
         after_scheduler=scheduler_cosine
     )
+    if args.resume:
+        checkpoint = torch.load(resume_ckpt)
+        scheduler_state = checkpoint.get('scheduler', None)
+        if scheduler_state is not None:
+            scheduler.load_state_dict(scheduler_state)
 
     criterion_char = losses.CharbonnierLoss()
     criterion_edge = losses.EdgeLoss()
@@ -303,7 +308,9 @@ def main():
                     for res, tar in zip(restored[0], target):
                         psnr_val_rgb.append(utils.torchPSNR(res, tar))
 
-            psnr_val = torch.stack(psnr_val_rgb).mean().item() if len(psnr_val_rgb) > 0 else 0.0
+            if len(psnr_val_rgb) == 0:
+                raise RuntimeError('Validation set is empty, cannot compute PSNR.')
+            psnr_val = torch.stack(psnr_val_rgb).mean().item()
             print('val/psnr', psnr_val, epoch)
 
             if psnr_val > best_psnr:
@@ -321,7 +328,7 @@ def main():
 
         scheduler.step()
 
-        lr_now = scheduler.get_lr()[0]
+        lr_now = scheduler.get_last_lr()[0]
         print('-' * 66)
         print(f'Epoch: {epoch}\tTime: {time.time() - epoch_start:.2f}\tLoss: {epoch_loss:.4f}\tLR {lr_now:.6f}')
         print('-' * 66)
